@@ -3,3 +3,7 @@ target/
 *.nsys-rep
 *.sqlite
 .DS_Store
+gb10_inference
+head_server.log
+.gitignore
+node_ai2.log
