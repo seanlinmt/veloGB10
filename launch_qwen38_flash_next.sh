@@ -1,0 +1,1 @@
+scripts/launch_qwen38_flash_next.sh

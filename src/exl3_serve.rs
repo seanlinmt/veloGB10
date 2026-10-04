@@ -2263,6 +2263,27 @@ impl Exl3Scheduler {
                 ServingMsg::Step(se) => {
                     anyhow::ensure!(se.step == step_no + 1, "TP mirror: head step {} after local step {step_no}", se.step);
                     step_no = se.step;
+                    // VIS-4: read all binary image payloads right after the Step frame, in admit order,
+                    // BEFORE entering admit() / prefill (which uses the control stream for HeadFlag).
+                    let mut payloads: Vec<Option<Vec<f32>>> = Vec::new();
+                    for ev in &se.events {
+                        if let TpEvent::Admit(w) = ev {
+                            let (ib, idg) = (w.image_bytes, w.image_digest);
+                            if ib > 0 {
+                                use std::io::Read;
+                                let mut buf = vec![0u8; ib as usize];
+                                let t = self.tp.as_mut().context("mirror without TP state")?;
+                                t.ctl[0].read_exact(&mut buf).context("TP node: image payload read")?;
+                                anyhow::ensure!(crate::tp_serve::fnv64(&buf) == idg,
+                                                "TP node: image payload digest mismatch (step {step_no})");
+                                payloads.push(Some(buf.chunks_exact(2)
+                                    .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32()).collect()));
+                            } else {
+                                payloads.push(None);
+                            }
+                        }
+                    }
+                    let mut payload_iter = payloads.into_iter();
                     for ev in se.events {
                         match ev {
                             TpEvent::Cancel { lane } => {
@@ -2273,20 +2294,9 @@ impl Exl3Scheduler {
                             TpEvent::Admit(w) => {
                                 let (tx, _) = tokio::sync::mpsc::unbounded_channel::<TokEvent>();
                                 let min_p = w.min_p;
-                                let (ib, idg) = (w.image_bytes, w.image_digest);
                                 let mut req = w.into_request(tx);
                                 req.min_p = min_p;
-                                if ib > 0 {
-                                    // VIS-4: this admit's image rows follow the Step frame (binary channel)
-                                    use std::io::Read;
-                                    let mut buf = vec![0u8; ib as usize];
-                                    let t = self.tp.as_mut().context("mirror without TP state")?;
-                                    t.ctl[0].read_exact(&mut buf).context("TP node: image payload read")?;
-                                    anyhow::ensure!(crate::tp_serve::fnv64(&buf) == idg,
-                                                    "TP node: image payload digest mismatch (step {step_no})");
-                                    req.image_embeds = Some(buf.chunks_exact(2)
-                                        .map(|c| half::f16::from_bits(u16::from_le_bytes([c[0], c[1]])).to_f32()).collect());
-                                }
+                                req.image_embeds = payload_iter.next().flatten();
                                 admitted += 1;
                                 self.admit(req);
                             }
@@ -2954,6 +2964,25 @@ fn build_serve(args: &[String], model_dir: &str, tp: Option<crate::exl3_forward:
             std::path::Path::new(model_dir)
                 .file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "exl3-model".into())
         });
+    let otel_cfg = arg(args, "--otel-endpoint").map(|ep| crate::otel::OtelConfig {
+        endpoint: ep.trim_end_matches('/').to_string(),
+        batch_size: arg(args, "--otel-batch-size").and_then(|s| s.parse().ok()).unwrap_or(512),
+        batch_interval_ms: arg(args, "--otel-batch-interval-ms").and_then(|s| s.parse().ok()).unwrap_or(100),
+        include_tokens: matches!(arg(args, "--otel-include-tokens").unwrap_or("on"),
+                                 "on" | "true" | "1" | "yes"),
+        model_id: arg(args, "--otel-model-id").map(str::to_string),
+        topology: arg(args, "--otel-topology").map(str::to_string),
+    });
+    if let Some(cfg) = &otel_cfg {
+        if let Err(e) = cfg.hostport() {
+            eprintln!("[otel] {e}");
+            std::process::exit(1);
+        }
+    }
+    let otel_sink = otel_cfg.map(|cfg| {
+        let topology = crate::otel::topology_from_world(Some(tp_world));
+        crate::otel::OtelSink::new(cfg, &model_name, &topology)
+    });
     let state = AppState {
         sampling_defaults: crate::server::SamplingDefaults::QWEN38_CARD,
         scheduler: stx,
@@ -2977,7 +3006,7 @@ fn build_serve(args: &[String], model_dir: &str, tp: Option<crate::exl3_forward:
         vision_gpu,
         vision_cpu: false,
         stop_ids: eos,
-        otel: None,
+        otel: otel_sink,
     };
     Ok(ServeParts { sched, state, port, cpu_aff, exit_on_fatal, rx: srx })
 }
@@ -3098,6 +3127,9 @@ fn serve_http(parts: ServeParts, tp_ctl: Option<Vec<std::net::TcpStream>>) -> Re
         .build().context("tokio runtime")?;
     println!("[exl3-serve] listening on 0.0.0.0:{port} (model id: {model_name})");
     rt.block_on(async move {
+        if let Some(otel) = &state.otel {
+            tokio::spawn(crate::otel::run_sender(Arc::clone(otel)));
+        }
         let app = create_router(state);
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
         // WP02: TCP_NODELAY — an SSE token event is a few dozen bytes; Nagle held them for the ACK

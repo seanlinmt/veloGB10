@@ -1299,7 +1299,7 @@ fn prefill_cossin_host(theta: f32, rdim: usize, pos0: usize, c: usize) -> Vec<f3
 /// PLE table residency policy: [ple-ram] = on | off | auto (default auto; the server's
 /// --ple-ram sets it). auto loads the table into RAM when MemAvailable keeps >= 16 GiB free
 /// after it (the AGENTS §5 headroom rule), else stays on pread and SAYS so.
-fn ple_ram_load(shards: &[std::fs::File], data_off: &[u64], rows: i64) -> Result<Option<Vec<Vec<u8>>>> {
+fn ple_ram_load(shards: &[std::fs::File], data_off: &[u64], rows: i64, width: usize) -> Result<Option<Vec<Vec<u8>>>> {
     use std::os::unix::fs::FileExt;
     let mode = crate::opts::var(crate::opt!("ple-ram")).unwrap_or_else(|_| "auto".into());
     let per = rows as usize * 102;
@@ -1310,15 +1310,16 @@ fn ple_ram_load(shards: &[std::fs::File], data_off: &[u64], rows: i64) -> Result
         .unwrap_or(0);
     let avail = avail_kb * 1024;
     let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let headroom = (16u64 << 30) + (width.saturating_sub(1) as u64 * (2u64 << 30));
     let go = match mode.as_str() {
         "on" => true,
         "off" => false,
-        _ => avail >= need + (16u64 << 30),
+        _ => avail >= need + headroom,
     };
     if !go {
         println!("  PLE n-gram table: pread through the page cache ([ple-ram]={mode}; table {:.1} GiB, MemAvailable {:.1} GiB{})",
                  gib(need), gib(avail),
-                 if mode == "auto" { " — auto needs table + 16 GiB free; expect ~2 ms/round host PLE if the cache is crowded" } else { "" });
+                 if mode == "auto" { " — auto needs table + headroom free (16 GiB base + 2 GiB/lane); pread through page cache" } else { "" });
         return Ok(None);
     }
     let t0 = std::time::Instant::now();
@@ -6376,7 +6377,7 @@ impl FwdModel {
                         shard_data_off.push(8 + hlen as u64 + off0);
                         shards.push(f);
                     }
-                    let ram = ple_ram_load(&shards, &shard_data_off, rows_per_shard)?;
+                    let ram = ple_ram_load(&shards, &shard_data_off, rows_per_shard, width)?;
                     Some(PleDev {
                         key_w,
                         value_w,

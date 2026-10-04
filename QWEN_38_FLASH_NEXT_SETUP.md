@@ -4,7 +4,7 @@ This guide walks through bringing up **Qwen3.8-Flash-Next** from an **EXL3 pack*
 **TP=1, TP=2 and TP=4**. It covers the required files on each machine, the exact launch commands, the
 log lines you should expect, and the measured performance.
 
-- **Target model:** `doth4580/Qwen3.8-Flash-Next-EXL3-3.05bpw` — https://huggingface.co/doth4580/Qwen3.8-Flash-Next-EXL3-3.05bpw
+- **Target model:** `jeffpeng3/Qwen3.8-Flash-Next-exl3-3.05bpw-heretic` (uncensored / abliterated) or `doth4580/Qwen3.8-Flash-Next-EXL3-3.05bpw` (base).
 - **Format:** EXL3 (ExLlamaV3 trellis), 3.05 bpw. About 85 GB, including a 32.6 GB n-gram table.
 - **Full context:** launch with `--max-seq-len 262144` (the model's full 256K).
 
@@ -62,7 +62,7 @@ has this layout.
 
 ### The EXL3 pack (head only)
 
-Download the pack from `doth4580/Qwen3.8-Flash-Next-EXL3-3.05bpw` **onto the head**. The nodes get
+Download the pack (`jeffpeng3/Qwen3.8-Flash-Next-exl3-3.05bpw-heretic` or `doth4580/Qwen3.8-Flash-Next-EXL3-3.05bpw`) **onto the head**. The nodes get
 their rank's shard from the head at sync time (§2), so they do not need the pack:
 
 ```
