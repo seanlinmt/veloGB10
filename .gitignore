@@ -7,3 +7,4 @@ gb10_inference
 head_server.log
 .gitignore
 node_ai2.log
+head_server.log.bak

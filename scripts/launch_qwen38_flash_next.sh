@@ -50,7 +50,7 @@ IS_DRY_RUN="${DRY_RUN:-0}"
 OTEL_ENDPOINT="${OTEL_ENDPOINT:-http://192.168.20.16:9381}"
 MEM_WATCHDOG_GB="${MEM_WATCHDOG_GB:-3}"
 PLE_RAM="${PLE_RAM:-auto}"
-MTP_K="${MTP_K:-${MTP_DEPTH:-${MTP:-3}}}"
+MTP_K="${MTP_K:-${MTP_DEPTH:-${MTP:-5}}}"
 USER_ARGS=()
 
 show_help() {
@@ -70,7 +70,7 @@ Options:
   -m, --model-dir PATH     Explicit path to EXL3 pack (auto-detected if omitted)
   -n, --nodes LIST         Node list (default: 192.168.177.12:29500 for TP=2)
   --name NAME              Served model name (default: qwen3.8-flash-next)
-  --mtp, --mtp-depth N     Speculative decoding draft depth / MTP K (default: 3)
+  --mtp, --mtp-depth N     Speculative decoding draft depth / MTP K (default: 5)
   --otel-endpoint URL      OpenTelemetry collector endpoint (default: http://192.168.20.16:9381)
   --no-otel                Disable OpenTelemetry export
   --dry-run                Validate and display command without launching
@@ -288,10 +288,10 @@ if [ "$TP" -gt 1 ]; then
   # Auto-check/start peer node if target is ai2
   if [ "$TP" -eq 2 ] && [[ "$NODES" == *"192.168.177.12"* ]]; then
     if ssh -o BatchMode=yes -o ConnectTimeout=3 -n "$WORKER_HOST" "true" 2>/dev/null; then
-      if ! ssh -n "$WORKER_HOST" "pgrep -f 'gb10_inference.*--node' >/dev/null 2>&1"; then
+      if ! ssh -n "$WORKER_HOST" "pgrep -f '[g]b10_inference.*--node' >/dev/null 2>&1"; then
         echo "=== Peer node on $WORKER_HOST not running. Starting supervisor... ==="
         ssh -f "$WORKER_HOST" "cd '$REPO_ROOT' && nohup ./gb10_inference --node --port 29500 --rdma-dev '$RDMA_DEV' >'$REPO_ROOT/node_${WORKER_HOST}.log' 2>&1 < /dev/null"
-        sleep 1
+        sleep 2
       else
         echo "=== Peer node already running on $WORKER_HOST ==="
       fi
